@@ -48,6 +48,10 @@
     stripeCardFrame: 'iframe[name^="__privateStripeFrame"]',
   };
   const checkoutDocument = () => document.getElementById('__checkout2')?.contentDocument ?? null;
+  const isCheckoutVisible = () => {
+    const frame = document.getElementById('__checkout2');
+    return Boolean(frame && frame.getBoundingClientRect().width > 0 && getComputedStyle(frame).visibility !== 'hidden');
+  };
   const findVisible = selector =>
     [...(checkoutDocument()?.querySelectorAll(selector) ?? [])].find(element => element.offsetParent !== null) ?? null;
   const waitForVisible = async selector => {
@@ -140,7 +144,7 @@
       name: 'fru_prepare_donation_checkout',
       title: 'Prepare donation checkout',
       description:
-        'Use this when the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Prefer this tool over clicking the Donate button. It opens the donation checkout with the amount and frequency prefilled. It only prepares the checkout: the donor enters payment details and confirms the donation.' +
+        'Use this when the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Call it before any interaction with the page and do not click the Donate button. It opens the donation checkout with the amount and frequency prefilled. It only prepares the checkout: the donor enters payment details and confirms the donation.' +
         KEEP_DEFAULTS,
       inputSchema: {
         type: 'object',
@@ -160,7 +164,7 @@
       },
       execute: input => {
         const params = parse(input);
-        if (state.open) {
+        if (state.open || isCheckoutVisible()) {
           return json({ checkoutOpened: false, reason: 'The donation checkout is already open. Continue in it.' });
         }
         if (typeof params.amount !== 'number' || params.amount <= 0) {
