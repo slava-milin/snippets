@@ -150,7 +150,7 @@
           frequency: {
             type: 'string',
             description:
-              'once, monthly and so on. Set it only when the user named it; otherwise leave it empty and the campaign default is used.',
+              'once or monthly. Use monthly when the user asks for a subscription or a recurring donation, for example "subscribe", "every month", "оформи подписку". Otherwise leave it empty and a one-time donation is used.',
           },
           firstName: { type: 'string', description: 'Optional, only if the user provided it.' },
           lastName: { type: 'string', description: 'Optional, only if the user provided it.' },
