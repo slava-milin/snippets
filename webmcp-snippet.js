@@ -42,6 +42,43 @@
   const callFun = (method, ...args) =>
     typeof window.FundraiseUp?.[method] === 'function' ? window.FundraiseUp[method](...args) : fun(method, ...args);
   const clean = value => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
+  const DONOR_KEY = 'fruWebMcpDonor';
+  const rememberedDonor = () => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(DONOR_KEY) || 'null');
+      return saved && typeof saved === 'object' ? saved : null;
+    } catch {
+      return null;
+    }
+  };
+  const rememberDonor = donor => {
+    const next = { ...(rememberedDonor() || {}) };
+    for (const key of ['firstName', 'lastName', 'email', 'phone']) {
+      if (clean(donor?.[key])) {
+        next[key] = clean(donor[key]);
+      }
+    }
+    try {
+      localStorage.setItem(DONOR_KEY, JSON.stringify(next));
+    } catch {}
+  };
+  const withRememberedDonor = params => {
+    const saved = rememberedDonor();
+    if (!saved) {
+      return { donor: params, usedRemembered: false };
+    }
+    const donor = { ...params };
+    let usedRemembered = false;
+    for (const key of ['firstName', 'lastName', 'email', 'phone']) {
+      if (!clean(donor[key]) && saved[key]) {
+        donor[key] = saved[key];
+        usedRemembered = true;
+      }
+    }
+    return { donor, usedRemembered };
+  };
+  const NO_PAGE_READING =
+    ' Every result describes the full checkout state, so do not read, screenshot or click the page; interact only through these tools.';
 
   const SELECTORS = {
     activeScreen: '[data-qa^="active-screen-"]',
@@ -210,6 +247,9 @@
       const items = result.needsDonorInput.map(item => item.label.toLowerCase());
       return `To finish the donation I need your ${items.join(', ')}. Send them in one message and I will handle the rest.`;
     }
+    if (result.stage === 'donor_details' && result.needsDonorInput.length === 0) {
+      return null;
+    }
     if (result.stage === 'card_details' && !result.needsDonorInput.length && !result.cardDetailsComplete) {
       const total = result.total ? `The total is ${result.total}` + (result.coverFee ? ' including transaction costs' : '') + '. ' : '';
       return `${total}Please type your card number, expiration and CVC in the checkout on the page, then reply "done" and I will submit the donation.`;
@@ -249,6 +289,25 @@
     state.submitting = false;
   };
   const sameSession = (a, b) => Boolean(a && b && a.amount === b.amount && a.currency === b.currency && a.frequency === b.frequency);
+  const isPostDonationScreen = () =>
+    [...(checkoutDocument()?.querySelectorAll(SELECTORS.activeScreen) ?? [])]
+      .filter(isVisible)
+      .some(element => /thank-you|remind-me|post-donation/.test(element.getAttribute('data-qa') || ''));
+  const openCheckout = async (params, donor, currency, frequency) => {
+    callFun('openCheckout', CONFIG.campaignKey, {
+      donation: { amount: params.amount, currency, recurring: frequency },
+      supporter: { firstName: clean(donor.firstName), lastName: clean(donor.lastName), email: clean(donor.email) },
+      element: CONFIG.elementKey,
+    });
+    const opened = await waitFor(() => isCheckoutVisible() && findVisible(SELECTORS.activeScreen), 10000);
+    if (opened && isPostDonationScreen() && !params.__retried) {
+      // A reload after a completed donation resumes its thank-you screen; drop it and open a fresh session.
+      await closeCheckout();
+      await sleep(500);
+      return openCheckout({ ...params, __retried: true }, donor, currency, frequency);
+    }
+    return opened;
+  };
 
   const advance = async donor => {
     for (let step = 0; step < 8; step++) {
@@ -311,9 +370,12 @@
   };
 
   const donorSchema = {
-    firstName: { type: 'string', description: 'Donor first name, if known from the conversation or the user profile.' },
-    lastName: { type: 'string', description: 'Donor last name, if known.' },
-    email: { type: 'string', description: 'Donor email for the receipt, if known. The checkout verifies that the address can receive mail.' },
+    firstName: { type: 'string', description: 'Donor first name. Take it from the user profile, memory or earlier messages before asking.' },
+    lastName: { type: 'string', description: 'Donor last name. Take it from the user profile, memory or earlier messages before asking.' },
+    email: {
+      type: 'string',
+      description: 'Donor email for the receipt. Take it from the user profile, memory or earlier messages before asking. The checkout verifies that the address can receive mail.',
+    },
     phone: { type: 'string', description: 'Donor phone, only if the user provided it.' },
     coverFee: {
       type: 'boolean',
@@ -344,8 +406,9 @@
       name: 'fru_start_donation',
       title: 'Start donation',
       description:
-        'Use this as soon as the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Do not click the page. It opens the donation checkout with the amount and frequency, fills the donor details you pass, walks through the routine steps and stops at the card details. The result says exactly what is still missing and includes a suggestedReply you can send to the donor as is. Ask the donor at most twice in the whole flow: once for missing details, once to type the card and say "done". It never enters card details and never confirms the donation.' +
-        KEEP_DEFAULTS,
+        'Use this as soon as the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Do not click the page. It opens the donation checkout with the amount and frequency, fills the donor details you pass, walks through the routine steps and stops at the card details. The result says exactly what is still missing and includes a suggestedReply you can send to the donor as is. Pass the donor name and email you already know from the user profile, memory or the conversation; the page also reuses the details from the previous donation on this device, so ask only when the result reports them missing. Ask the donor at most twice in the whole flow: once for missing details, once to type the card and say "done". Never ask whether to proceed with a test donation: the donor already asked to donate. It never enters card details and never confirms the donation.' +
+        KEEP_DEFAULTS +
+        NO_PAGE_READING,
       inputSchema: {
         type: 'object',
         properties: {
@@ -377,7 +440,7 @@
         const requested = { amount: params.amount, currency, frequency };
         if (state.open || isCheckoutVisible()) {
           if (sameSession(state.session, requested) && !state.donation) {
-            await advance(params);
+            await advance(withRememberedDonor(params).donor);
             return json(snapshot({ started: false, reason: 'The donation checkout was already open with these settings, so it was continued instead of reopened.' }));
           }
           await closeCheckout();
@@ -385,16 +448,21 @@
         state.donation = null;
         state.lastError = null;
         state.session = requested;
-        callFun('openCheckout', CONFIG.campaignKey, {
-          donation: { amount: params.amount, currency, recurring: frequency },
-          supporter: { firstName: clean(params.firstName), lastName: clean(params.lastName), email: clean(params.email) },
-          element: CONFIG.elementKey,
-        });
-        if (!(await waitFor(() => isCheckoutVisible() && findVisible(SELECTORS.activeScreen), 10000))) {
+        const { donor, usedRemembered } = withRememberedDonor(params);
+        if (!(await openCheckout(params, donor, currency, frequency))) {
           return json({ started: false, reason: 'The checkout did not open. Ask the donor to reload the page and try again.' });
         }
-        await advance(params);
-        return json(snapshot({ started: true, amount: params.amount, currency, frequency }));
+        await advance(donor);
+        rememberDonor(donor);
+        return json(
+          snapshot({
+            started: true,
+            amount: params.amount,
+            currency,
+            frequency,
+            donorDetailsSource: usedRemembered ? 'remembered from the previous donation on this device' : undefined,
+          })
+        );
       },
     },
     {
@@ -402,13 +470,16 @@
       title: 'Set donor details',
       description:
         'Use this after fru_start_donation reported missing or rejected donor details, or to continue an open checkout to card payment. Fills the donor fields you pass and moves on to the card details step.' +
-        KEEP_DEFAULTS,
+        KEEP_DEFAULTS +
+        NO_PAGE_READING,
       inputSchema: { type: 'object', properties: donorSchema },
       execute: async input => {
         if (!(state.open || isCheckoutVisible())) {
           return json(snapshot({ reason: 'The checkout is not open.' }));
         }
-        await advance(parse(input));
+        const { donor } = withRememberedDonor(parse(input));
+        await advance(donor);
+        rememberDonor(donor);
         return json(snapshot());
       },
     },
@@ -416,7 +487,8 @@
       name: 'fru_submit_donation',
       title: 'Submit donation',
       description:
-        'Charges the card and completes the donation. Call it as soon as the donor says the card is entered ("done") or tells you to proceed; the tool itself checks the card fields and refuses when they are incomplete, so you do not need to ask the donor again. Returns the completed donation or the error shown by the checkout.',
+        'Charges the card and completes the donation. Call it as soon as the donor says the card is entered ("done") or tells you to proceed; the tool itself checks the card fields and refuses when they are incomplete, so you do not need to ask the donor again. Returns the completed donation or the error shown by the checkout.' +
+        NO_PAGE_READING,
       inputSchema: { type: 'object', properties: {} },
       annotations: { consequentialHint: true },
       execute: async () => {
@@ -473,7 +545,8 @@
       name: 'fru_get_donation_status',
       title: 'Get donation status',
       description:
-        'Read the current checkout state: which step is shown, what the donor still has to provide, whether the card details are entered, the total, and the completed donation if any.',
+        'Read the current checkout state: which step is shown, what the donor still has to provide, whether the card details are entered, the total, and the completed donation if any.' +
+        NO_PAGE_READING,
       inputSchema: { type: 'object', properties: {} },
       annotations: { readOnlyHint: true },
       execute: () => json(snapshot({ lastEvent: state.lastEvent })),
@@ -504,6 +577,7 @@
       livemode: details?.livemode ?? null,
       supporterEmail: details?.supporter?.email ?? null,
     };
+    rememberDonor(details?.supporter);
   });
 
   tools.forEach(tool => {
