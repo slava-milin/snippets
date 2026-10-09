@@ -12,6 +12,8 @@
     frequencies: ['once', 'monthly'],
     suggestedAmounts: [1000, 500, 300, 120, 55, 25],
     paymentMethods: ['card', 'googlePay'],
+    // Demo donor used when the agent passes no details and nothing is remembered on this device.
+    defaultDonor: { firstName: 'Ivan', lastName: 'Lebed', email: 'ivan.lebed@fundraiseup.com' },
   };
 
   const modelContext = document.modelContext;
@@ -63,19 +65,27 @@
     } catch {}
   };
   const withRememberedDonor = params => {
-    const saved = rememberedDonor();
-    if (!saved) {
-      return { donor: params, usedRemembered: false };
-    }
     const donor = { ...params };
-    let usedRemembered = false;
-    for (const key of ['firstName', 'lastName', 'email', 'phone']) {
-      if (!clean(donor[key]) && saved[key]) {
-        donor[key] = saved[key];
-        usedRemembered = true;
+    const sources = [];
+    for (const [label, source] of [
+      ['remembered from the previous donation on this device', rememberedDonor()],
+      ['the page default donor', CONFIG.defaultDonor],
+    ]) {
+      if (!source) {
+        continue;
+      }
+      let used = false;
+      for (const key of ['firstName', 'lastName', 'email', 'phone']) {
+        if (!clean(donor[key]) && clean(source[key])) {
+          donor[key] = clean(source[key]);
+          used = true;
+        }
+      }
+      if (used) {
+        sources.push(label);
       }
     }
-    return { donor, usedRemembered };
+    return { donor, usedRemembered: sources.length > 0, donorSource: sources.join(' and ') || undefined };
   };
   const NO_PAGE_READING =
     ' Every result describes the full checkout state, so do not read, screenshot or click the page; interact only through these tools.';
@@ -406,7 +416,7 @@
       name: 'fru_start_donation',
       title: 'Start donation',
       description:
-        'Use this as soon as the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Do not click the page. It opens the donation checkout with the amount and frequency, fills the donor details you pass, walks through the routine steps and stops at the card details. The result says exactly what is still missing and includes a suggestedReply you can send to the donor as is. Pass the donor name and email you already know from the user profile, memory or the conversation; the page also reuses the details from the previous donation on this device, so ask only when the result reports them missing. Ask the donor at most twice in the whole flow: once for missing details, once to type the card and say "done". Never ask whether to proceed with a test donation: the donor already asked to donate. It never enters card details and never confirms the donation.' +
+        'Use this as soon as the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Do not click the page. It opens the donation checkout with the amount and frequency, fills the donor details you pass, walks through the routine steps and stops at the card details. The result says exactly what is still missing and includes a suggestedReply you can send to the donor as is. Pass the donor name and email only if the user stated them in the conversation; otherwise pass nothing, the page fills the donor details itself (the previous donation on this device or its default donor) and the result reports which source it used. Do not ask the user for name or email unless the result lists them in needsDonorInput. Ask the donor at most twice in the whole flow: once for missing details, once to type the card and say "done". Never ask whether to proceed with a test donation: the donor already asked to donate. It never enters card details and never confirms the donation.' +
         KEEP_DEFAULTS +
         NO_PAGE_READING,
       inputSchema: {
@@ -448,7 +458,7 @@
         state.donation = null;
         state.lastError = null;
         state.session = requested;
-        const { donor, usedRemembered } = withRememberedDonor(params);
+        const { donor, donorSource } = withRememberedDonor(params);
         if (!(await openCheckout(params, donor, currency, frequency))) {
           return json({ started: false, reason: 'The checkout did not open. Ask the donor to reload the page and try again.' });
         }
@@ -460,7 +470,7 @@
             amount: params.amount,
             currency,
             frequency,
-            donorDetailsSource: usedRemembered ? 'remembered from the previous donation on this device' : undefined,
+            donorDetailsSource: donorSource,
           })
         );
       },
