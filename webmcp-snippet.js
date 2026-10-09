@@ -21,7 +21,7 @@
   window.__fruWebMcpDemo = true;
 
   const KEEP_DEFAULTS =
-    ' Never change checkout options the donor did not ask for (currency, frequency, covering transaction costs).';
+    ' Never change, and never offer to change, checkout options the donor did not ask for (currency, frequency, covering transaction costs). Do not ask the donor to confirm the amount again.';
   const CARD_NOTE =
     'Card number, expiration and CVC live in Stripe iframes and can only be typed by the donor in the checkout on this page.';
 
@@ -198,7 +198,23 @@
     if (!result.nextStep) {
       result.nextStep = nextStepFor(result);
     }
+    const reply = suggestedReplyFor(result);
+    if (reply) {
+      result.suggestedReply = reply;
+    }
     return result;
+  };
+
+  const suggestedReplyFor = result => {
+    if (result.stage === 'donor_details' && result.needsDonorInput.length) {
+      const items = result.needsDonorInput.map(item => item.label.toLowerCase());
+      return `To finish the donation I need your ${items.join(', ')}. Send them in one message and I will handle the rest.`;
+    }
+    if (result.stage === 'card_details' && !result.needsDonorInput.length && !result.cardDetailsComplete) {
+      const total = result.total ? `The total is ${result.total}` + (result.coverFee ? ' including transaction costs' : '') + '. ' : '';
+      return `${total}Please type your card number, expiration and CVC in the checkout on the page, then reply "done" and I will submit the donation.`;
+    }
+    return null;
   };
 
   const nextStepFor = result => {
@@ -209,14 +225,14 @@
         return 'The payment is being processed or needs bank authentication in the checkout. Call fru_get_donation_status again in a few seconds.';
       case 'card_details':
         if (result.needsDonorInput.length) {
-          return 'Ask the donor for the items in needsDonorInput, then call fru_set_donor_details.';
+          return 'Ask the donor for the items in needsDonorInput in one message, then call fru_set_donor_details.';
         }
         return result.cardDetailsComplete
-          ? 'Card details are entered. Tell the donor the total and ask for their go-ahead, then call fru_submit_donation.' + KEEP_DEFAULTS
-          : CARD_NOTE + ' Ask the donor to type them, then ask for their go-ahead and call fru_submit_donation.' + KEEP_DEFAULTS;
+          ? 'Card details are entered. If the donor already told you to proceed, call fru_submit_donation now. Otherwise ask once whether to submit the total shown and call it on yes.' + KEEP_DEFAULTS
+          : CARD_NOTE + ' Send the donor one message: the total, and a request to type the card details in the checkout on this page and reply "done". Treat "done" or any go-ahead as the confirmation and call fru_submit_donation right away, without another question. If the page shows test mode, mention it in a short clause of the same message; never ask about it.' + KEEP_DEFAULTS;
       case 'donor_details':
         return result.needsDonorInput.length
-          ? 'Ask the donor for all items in needsDonorInput in one message, then call fru_set_donor_details with the answers.'
+          ? 'Ask the donor for all items in needsDonorInput in one message and nothing else, then call fru_set_donor_details with the answers. The card details come later, do not ask for them yet.'
           : 'Call fru_set_donor_details to continue to card payment.';
       case 'closed':
         return 'The checkout is not open. Call fru_start_donation.';
@@ -328,7 +344,7 @@
       name: 'fru_start_donation',
       title: 'Start donation',
       description:
-        'Use this as soon as the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Do not click the page. It opens the donation checkout with the amount and frequency, fills the donor details you pass, walks through the routine steps and stops at the card details. The result says exactly what is still missing. It never enters card details and never confirms the donation.' +
+        'Use this as soon as the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Do not click the page. It opens the donation checkout with the amount and frequency, fills the donor details you pass, walks through the routine steps and stops at the card details. The result says exactly what is still missing and includes a suggestedReply you can send to the donor as is. Ask the donor at most twice in the whole flow: once for missing details, once to type the card and say "done". It never enters card details and never confirms the donation.' +
         KEEP_DEFAULTS,
       inputSchema: {
         type: 'object',
@@ -400,7 +416,7 @@
       name: 'fru_submit_donation',
       title: 'Submit donation',
       description:
-        'Charges the card and completes the donation. Call it only after the donor typed the card details in the checkout and gave their go-ahead for the total shown. It refuses when the card details are incomplete. Returns the completed donation or the error shown by the checkout.',
+        'Charges the card and completes the donation. Call it as soon as the donor says the card is entered ("done") or tells you to proceed; the tool itself checks the card fields and refuses when they are incomplete, so you do not need to ask the donor again. Returns the completed donation or the error shown by the checkout.',
       inputSchema: { type: 'object', properties: {} },
       annotations: { consequentialHint: true },
       execute: async () => {
