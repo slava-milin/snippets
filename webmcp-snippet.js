@@ -1,8 +1,8 @@
 /* WebMCP prototype tools for a staging demo (TP 223827). Paste at the end of the overridden embed script. */
 (() => {
   const CONFIG = {
-    campaignKey: 'FUNNESUZCXM',
-    elementKey: 'XFLFRLZZ',
+    campaignKey: 'FUNTRNNDMMH',
+    elementKey: 'XZAQDCBY',
     currency: 'USD',
     frequencies: ['once', 'monthly'],
   };
