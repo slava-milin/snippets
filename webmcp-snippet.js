@@ -150,7 +150,7 @@
           frequency: {
             type: 'string',
             description:
-              'once, monthly and so on. Set it only when the user named it; otherwise leave it empty and the tool returns the frequencies to ask the donor about.',
+              'once, monthly and so on. Set it only when the user named it; otherwise leave it empty and the campaign default is used.',
           },
           firstName: { type: 'string', description: 'Optional, only if the user provided it.' },
           lastName: { type: 'string', description: 'Optional, only if the user provided it.' },
@@ -165,15 +165,6 @@
         }
         if (typeof params.amount !== 'number' || params.amount <= 0) {
           return json({ checkoutOpened: false, reason: 'Amount must be a positive number.' });
-        }
-        if (!params.frequency && CONFIG.frequencies.length > 1) {
-          return json({
-            checkoutOpened: false,
-            amount: params.amount,
-            askDonor: { field: 'frequency', question: 'How often would you like to give?', options: CONFIG.frequencies },
-            nextStep:
-              'Ask the donor how often they want to give and offer exactly these options; do not choose for them. Then call fru_prepare_donation_checkout again with the same amount and the chosen frequency.',
-          });
         }
         const frequency = params.frequency ?? CONFIG.frequencies[0];
         if (!CONFIG.frequencies.includes(frequency)) {
