@@ -417,19 +417,26 @@
       const list = values => values.map(money).join(', ');
       const once = `${money(info.recommendedAmount.once)} (the organization's suggested amount; other options ${list(info.amountOptions.once)})`;
       const monthly = `${money(info.recommendedAmount.monthly)} a month (options ${list(info.amountOptions.monthly)})`;
-      const numbered = (values, suffix) => values.map((value, index) => `${index + 1}) ${money(value)}${suffix}`).join('  ');
       if (typeof state.choice.amount === 'number' && !state.choice.frequency) {
         return `${money(state.choice.amount)}: reply with a number.  1) once  2) every month`;
       }
       if (state.choice.frequency && typeof state.choice.amount !== 'number') {
         const values = state.choice.frequency === 'monthly' ? info.amountOptions.monthly : info.amountOptions.once;
         const rec = state.choice.frequency === 'monthly' ? info.recommendedAmount.monthly : info.recommendedAmount.once;
-        return `How much would you like to give${state.choice.frequency === 'monthly' ? ' each month' : ''}? Reply with a number or your own amount. The organization suggests ${money(rec)}.  ${numbered(values, state.choice.frequency === 'monthly' ? '/month' : '')}`;
+        const near = [...values].filter(value => value !== rec).sort((x, y) => Math.abs(x - rec) - Math.abs(y - rec)).slice(0, 3).sort((x, y) => x - y);
+        const suffix = state.choice.frequency === 'monthly' ? ' every month' : ' once';
+        const list = [`${money(rec)}${suffix} (suggested)`, ...near.map(value => `${money(value)}${suffix}`), 'Another amount'];
+        return `How much would you like to give? Reply with a number.  ${list.map((option, index) => `${index + 1}) ${option}`).join('  ')}`;
       }
-      const onceList = numbered(info.amountOptions.once, ' once');
-      const monthlyStart = info.amountOptions.once.length;
-      const monthlyList = info.amountOptions.monthly.map((value, index) => `${monthlyStart + index + 1}) ${money(value)}/month`).join('  ');
-      return `How much would you like to give? Reply with a number or your own amount. The organization suggests ${money(info.recommendedAmount.once)} once or ${money(info.recommendedAmount.monthly)} a month.  ${onceList}  ${monthlyList}`;
+      // Keep the list short: the suggested one-time amount, the two closest presets, the suggested monthly amount, own amount.
+      const rec = info.recommendedAmount.once;
+      const nearest = [...info.amountOptions.once]
+        .filter(value => value !== rec)
+        .sort((x, y) => Math.abs(x - rec) - Math.abs(y - rec))
+        .slice(0, 2)
+        .sort((x, y) => x - y);
+      const options = [`${money(rec)} once (suggested)`, ...nearest.map(value => `${money(value)} once`), `${money(info.recommendedAmount.monthly)} every month (suggested)`, 'Another amount'];
+      return `How much would you like to give? Reply with a number.  ${options.map((option, index) => `${index + 1}) ${option}`).join('  ')}`;
     }
     if (result.stage === 'monthly_upsell') {
       const options = (result.monthlyUpsell?.options || []).map(option => `$${option.amount}`).join(' or ');
