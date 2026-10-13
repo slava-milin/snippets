@@ -383,7 +383,7 @@
 
   const completedLine = result => {
     const d = result.donation || {};
-    const money = d.amount != null ? `${d.currency === 'USD' ? '$' : ''}${d.amount}${d.currency && d.currency !== 'USD' ? ' ' + d.currency : ''}` : 'Your gift';
+    const money = d.amount != null ? `${d.currency === 'USD' ? '$' : ''}${Number(d.amount).toFixed(2)}${d.currency && d.currency !== 'USD' ? ' ' + d.currency : ''}` : 'Your gift';
     const freq = d.frequency === 'monthly' || d.recurring ? ' per month' : '';
     const email = d.receiptEmail ? ` to ${d.receiptEmail}` : '';
     const test = result.testMode ? ' (This is a test page, no real money moved.)' : '';
