@@ -25,7 +25,7 @@
   const KEEP_DEFAULTS =
     ' Never change currency or frequency unless the donor asks. Covering transaction costs is ON by default and stays on: the amount the donor named is the gift, the fee is added on top. Tell the donor it is on, give the total, and in the same message ask whether that is fine and you may continue. Never call fru_set_cover_fee(false) on your own initiative, and never because the donor named a round amount; only when the donor explicitly says they do not want to cover the fee.';
   const CARD_NOTE =
-    'Card number, expiration and CVC live in Stripe iframes; the page cannot fill them. The donor types them in the checkout on this page, or you type them yourself if the donor asks you to and you hold a payment credential for them (a wallet skill, a card the donor named, or a Stripe test card on this test page). Typing into the card fields is the one page interaction that is allowed.';
+    'Card number, expiration and CVC live in Stripe iframes; the page cannot fill them. Offer to enter them yourself as the first option: you can do it when you hold a payment credential for the donor (a wallet skill such as Link, a card the donor named) or, on this test page, with a Stripe test card. Typing the card is done once the donor says "go"; the donor typing the card in the checkout and replying "done" is the fallback. Typing into the card fields is the one page interaction that is allowed.';
 
   const state = {
     open: false,
@@ -401,10 +401,16 @@
     if (result.stage === 'card_details' && !result.needsDonorInput.length && !result.cardDetailsComplete) {
       const symbol = (result.total || '').match(/^[^\d]*/)?.[0] || '';
       if (result.coverFee && result.feeAmount) {
-        return `Covering transaction costs is on, so the total is ${result.total}: your gift plus ${symbol}${result.feeAmount.toFixed(2)} so the organization receives the full amount. If that is fine, type your card number, expiration and CVC in the checkout on the page and reply "done", or tell me to enter the card for you, and I will submit the donation. If you would rather not cover the fee, just say so.`;
+        const cardOffer = result.testMode
+          ? 'Say "go" and I will enter a test card and submit the donation (this is a test page, no real money moves). Or type your card in the checkout yourself and reply "done".'
+          : 'Say "go" and I will enter your card from your wallet and submit the donation. Or type your card in the checkout yourself and reply "done".';
+        return `Covering transaction costs is on, so the total is ${result.total}: your gift plus ${symbol}${result.feeAmount.toFixed(2)} so the organization receives the full amount. ${cardOffer} If you would rather not cover the fee, just say so.`;
       }
       const total = result.total ? `The total is ${result.total}. ` : '';
-      return `${total}Please type your card number, expiration and CVC in the checkout on the page, then reply "done" and I will submit the donation.`;
+      const cardOffer = result.testMode
+        ? 'Say "go" and I will enter a test card and submit the donation (this is a test page, no real money moves). Or type your card in the checkout yourself and reply "done".'
+        : 'Say "go" and I will enter your card from your wallet and submit the donation. Or type your card in the checkout yourself and reply "done".';
+      return `${total}${cardOffer}`;
     }
     if (result.stage === 'amount') {
       const info = result.amountStep;
@@ -463,7 +469,7 @@
         }
         return result.cardDetailsComplete
           ? 'Card details are entered. If the donor already told you to proceed, call fru_submit_donation now. Otherwise ask once whether to submit the total shown and call it on yes.' + KEEP_DEFAULTS
-          : CARD_NOTE + ' Send the donor one message (suggestedReply is ready to use): that covering transaction costs is on and the resulting total, a request to type the card details in the checkout on this page, and reply "done" if that is fine. Treat "done" or any go-ahead as the confirmation of both the total and the submission and call fru_submit_donation right away, without another question. If testMode is true in this result, add a short clause that this is a test page and no real money moves; never ask about it and never check the page for it.' + KEEP_DEFAULTS;
+          : CARD_NOTE + ' Send the donor one message (suggestedReply is ready to use): that covering transaction costs is on and the resulting total, and the offer to enter the card yourself on "go", with typing it themselves and replying "done" as the fallback. On "go": enter the card (test card on this test page, otherwise the donor\'s wallet credential) and call fru_submit_donation without another question. On "done" or any other go-ahead: call fru_submit_donation right away, without another question. If testMode is true in this result, add a short clause that this is a test page and no real money moves; never ask about it and never check the page for it.' + KEEP_DEFAULTS;
       case 'donor_details':
         return result.needsDonorInput.length
           ? 'Ask the donor for all items in needsDonorInput in one message and nothing else, then call fru_set_donor_details with the answers. The card details come later, do not ask for them yet.'
