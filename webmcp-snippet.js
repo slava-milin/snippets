@@ -94,7 +94,10 @@
     }
     return { donor, usedRemembered: sources.length > 0, donorSource: sources.join(' and ') || undefined };
   };
+  const NUMBERED_CHOICES =
+    ' suggestedReply lists the options as numbered choices so the donor can answer with a single number; send it word for word, keep the numbers, and map a number in the donor\'s answer to that option yourself before calling the next tool.';
   const NO_PAGE_READING =
+    NUMBERED_CHOICES +
     ' Every result describes the full checkout state, including testMode, so never open, read, screenshot, inspect or click the page, not even to check for test mode or card fields. The single exception: typing the card number, expiration and CVC into the card fields when the donor asks you to enter the card. Everything else goes through these tools.';
 
   const SELECTORS = {
@@ -401,16 +404,12 @@
     if (result.stage === 'card_details' && !result.needsDonorInput.length && !result.cardDetailsComplete) {
       const symbol = (result.total || '').match(/^[^\d]*/)?.[0] || '';
       if (result.coverFee && result.feeAmount) {
-        const cardOffer = result.testMode
-          ? 'Say "go" and I will enter a test card and submit the donation (this is a test page, no real money moves). Or type your card in the checkout yourself and reply "done".'
-          : 'Say "go" and I will enter your card from your wallet and submit the donation. Or type your card in the checkout yourself and reply "done".';
-        return `Covering transaction costs is on, so the total is ${result.total}: your gift plus ${symbol}${result.feeAmount.toFixed(2)} so the organization receives the full amount. ${cardOffer} If you would rather not cover the fee, just say so.`;
+        const enter = result.testMode ? 'I enter a test card and submit (test page, no real money moves)' : 'I enter your card from your wallet and submit';
+        return `Covering transaction costs is on, so the total is ${result.total}: your gift plus ${symbol}${result.feeAmount.toFixed(2)} so the organization receives the full amount. Reply with a number.  1) ${enter}  2) I typed the card in the checkout myself, submit  3) Do not cover the fee`;
       }
       const total = result.total ? `The total is ${result.total}. ` : '';
-      const cardOffer = result.testMode
-        ? 'Say "go" and I will enter a test card and submit the donation (this is a test page, no real money moves). Or type your card in the checkout yourself and reply "done".'
-        : 'Say "go" and I will enter your card from your wallet and submit the donation. Or type your card in the checkout yourself and reply "done".';
-      return `${total}${cardOffer}`;
+      const enter = result.testMode ? 'I enter a test card and submit (test page, no real money moves)' : 'I enter your card from your wallet and submit';
+      return `${total}Reply with a number.  1) ${enter}  2) I typed the card in the checkout myself, submit`;
     }
     if (result.stage === 'amount') {
       const info = result.amountStep;
@@ -418,25 +417,29 @@
       const list = values => values.map(money).join(', ');
       const once = `${money(info.recommendedAmount.once)} (the organization's suggested amount; other options ${list(info.amountOptions.once)})`;
       const monthly = `${money(info.recommendedAmount.monthly)} a month (options ${list(info.amountOptions.monthly)})`;
+      const numbered = (values, suffix) => values.map((value, index) => `${index + 1}) ${money(value)}${suffix}`).join('  ');
       if (typeof state.choice.amount === 'number' && !state.choice.frequency) {
-        return `Would you like to give ${money(state.choice.amount)} once, or become a monthly supporter? The organization suggests ${monthly}. Reply "one-time" or "monthly".`;
+        return `${money(state.choice.amount)}: reply with a number.  1) once  2) every month`;
       }
       if (state.choice.frequency && typeof state.choice.amount !== 'number') {
-        return state.choice.frequency === 'monthly'
-          ? `How much would you like to give each month? The organization suggests ${monthly}.`
-          : `How much would you like to give? The organization suggests ${once}.`;
+        const values = state.choice.frequency === 'monthly' ? info.amountOptions.monthly : info.amountOptions.once;
+        const rec = state.choice.frequency === 'monthly' ? info.recommendedAmount.monthly : info.recommendedAmount.once;
+        return `How much would you like to give${state.choice.frequency === 'monthly' ? ' each month' : ''}? Reply with a number or your own amount. The organization suggests ${money(rec)}.  ${numbered(values, state.choice.frequency === 'monthly' ? '/month' : '')}`;
       }
-      return `How much would you like to give? The organization suggests ${once}. You can also become a monthly supporter at ${monthly}. Reply with the amount and "one-time" or "monthly".`;
+      const onceList = numbered(info.amountOptions.once, ' once');
+      const monthlyStart = info.amountOptions.once.length;
+      const monthlyList = info.amountOptions.monthly.map((value, index) => `${monthlyStart + index + 1}) ${money(value)}/month`).join('  ');
+      return `How much would you like to give? Reply with a number or your own amount. The organization suggests ${money(info.recommendedAmount.once)} once or ${money(info.recommendedAmount.monthly)} a month.  ${onceList}  ${monthlyList}`;
     }
     if (result.stage === 'monthly_upsell') {
       const options = (result.monthlyUpsell?.options || []).map(option => `$${option.amount}`).join(' or ');
       const amounts = options ? ` at ${options} per month` : '';
-      return `Before we continue: the organization asks whether you would like to become a monthly supporter${amounts} instead of a one-time gift. Reply with the monthly amount, or "one-time" to keep your gift as is.`;
+      return `Before we continue, the organization asks whether you would like to become a monthly supporter${amounts} instead of a one-time gift. Reply with a number.  1) Keep my one-time gift  2) Yes, monthly`;
     }
     if (result.stage === 'completed' && result.monthlyUpsell && result.monthlyUpsell.offered && !result.monthlyUpsell.answered && !result.monthlyUpsell.alreadyDeclined) {
       const amount = result.monthlyUpsell.amount ? `$${result.monthlyUpsell.amount}` : 'a small amount';
       const start = result.monthlyUpsell.startDate ? ` starting ${result.monthlyUpsell.startDate}` : '';
-      return `${completedLine(result)} The organization also offers to become a monthly supporter at ${amount} per month${start}, charged to the same card. Would you like that? Reply "yes" or "no".`;
+      return `${completedLine(result)} The organization also offers to become a monthly supporter at ${amount} per month${start}, charged to the same card. Reply with a number.  1) No, thanks  2) Yes, monthly`;
     }
     if (result.stage === 'completed') {
       return completedLine(result) + (result.monthlyUpsell?.accepted ? ' Your monthly donation is set up as well.' : '');
