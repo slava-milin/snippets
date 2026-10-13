@@ -10,7 +10,8 @@
     elementKey: 'XZAQDCBY',
     currency: 'USD',
     frequencies: ['once', 'monthly'],
-    suggestedAmounts: [1000, 500, 300, 120, 55, 25],
+    suggestedAmounts: { once: [1000, 500, 300, 100, 55, 25], monthly: [250, 130, 55, 35, 10, 5] },
+    recommendedAmounts: { once: 60, monthly: 25 },
     paymentMethods: ['card', 'googlePay'],
   };
 
@@ -34,6 +35,7 @@
     session: null,
     coverFeeWanted: undefined,
     monthlyUpsell: null,
+    choice: { amount: undefined, frequency: undefined },
   };
   const json = payload => ({ content: [{ type: 'text', text: JSON.stringify(payload) }] });
   const parse = input => {
@@ -97,6 +99,10 @@
   const SELECTORS = {
     activeScreen: '[data-qa^="active-screen-"]',
     donateScreenButton: '[data-qa="donate-with-other-methods-button"], [data-qa="donate-button"]',
+    amountSection: '[data-qa="amount-section"]',
+    amountInput: '[data-qa="amount"]',
+    amountRadios: '[data-qa="suggested-amount-radio"]',
+    frequencyRadios: 'input[data-qa$="frequent-button"]',
     upsellScreen: '[data-qa="active-screen-upsell"]',
     keepOneTimeButton: '[data-qa="upsell-one-time"], [data-qa="keep-one-time-link"]',
     privacyScreen: '[data-qa="active-screen-privacy"]',
@@ -223,12 +229,73 @@
       await sleep(400);
     }
   };
+  const readAmountScreen = () => {
+    if (!findVisible(SELECTORS.amountSection)) {
+      return null;
+    }
+    const frequencies = findAllVisible(SELECTORS.frequencyRadios).map(input => ({
+      value: input.value,
+      label: text(checkoutDocument()?.querySelector(`[data-qa="${input.getAttribute('data-qa').replace('button', 'label')}"]`)) || input.value,
+      selected: input.checked,
+    }));
+    const selectedFrequency = frequencies.find(f => f.selected)?.value ?? 'once';
+    const options = findAllVisible(SELECTORS.amountRadios)
+      .map(input => Number(input.value) / 100)
+      .filter(value => value > 0);
+    return { frequencies, selectedFrequency, amountOptions: options, enteredAmount: parseMoney(findVisible(SELECTORS.amountInput)?.value) };
+  };
+  const amountStepInfo = () => {
+    const live = readAmountScreen();
+    const freq = live?.selectedFrequency ?? 'once';
+    const other = freq === 'once' ? 'monthly' : 'once';
+    const info = {
+      frequencies: live?.frequencies ?? [
+        { value: 'once', label: 'Give once', selected: true },
+        { value: 'monthly', label: 'Monthly', selected: false },
+      ],
+      amountOptions: { [freq]: live?.amountOptions?.length ? live.amountOptions : CONFIG.suggestedAmounts[freq], [other]: CONFIG.suggestedAmounts[other] },
+      recommendedAmount: { ...CONFIG.recommendedAmounts },
+      currency: CONFIG.currency,
+    };
+    if (live && typeof state.choice.amount !== 'number' && live.enteredAmount) {
+      info.recommendedAmount[freq] = live.enteredAmount;
+    }
+    return info;
+  };
+  const chooseOnAmountScreen = async (amount, frequency) => {
+    const freqInput = findAllVisible(SELECTORS.frequencyRadios).find(input => input.value === frequency);
+    if (freqInput && !freqInput.checked) {
+      freqInput.click();
+      await sleep(500);
+    }
+    const radio = findAllVisible(SELECTORS.amountRadios).find(input => Number(input.value) / 100 === amount);
+    if (radio) {
+      radio.click();
+    } else {
+      const input = findVisible(SELECTORS.amountInput);
+      if (input) {
+        input.focus();
+        fillInput(input, String(amount));
+      }
+    }
+    await sleep(500);
+    const after = readAmountScreen();
+    return Boolean(after && after.selectedFrequency === frequency && after.enteredAmount === amount);
+  };
+
   const readMonthlyUpsell = () => {
     const block = findVisible(SELECTORS.postUpsellBlock);
     if (block) {
       const amount = parseMoney(text(findVisible(SELECTORS.postUpsellAmountValue)) || findVisible(SELECTORS.postUpsellAmountInput)?.value);
       const start = text(block).match(/starting (?:on )?([A-Z][a-z]{2,8} \d{1,2})/);
-      return { offered: true, when: 'after_donation', amount, startDate: start ? start[1] : undefined, text: text(block).slice(0, 300) };
+      return {
+        offered: true,
+        when: 'after_donation',
+        amount,
+        startDate: start ? start[1] : undefined,
+        alreadyDeclined: state.choice.frequency === 'once' ? true : undefined,
+        text: text(block).slice(0, 300),
+      };
     }
     if (state.donation) {
       return state.monthlyUpsell && state.monthlyUpsell.when === 'after_donation' ? state.monthlyUpsell : null;
@@ -280,7 +347,9 @@
     } else if (open) {
       stage = live.cardDetailsShown
         ? 'card_details'
-        : live.monthlyUpsell && live.monthlyUpsell.when === 'before_payment' && !live.monthlyUpsell.answered
+        : findVisible(SELECTORS.amountSection) && !live.screens.includes('privacy')
+          ? 'amount'
+          : live.monthlyUpsell && live.monthlyUpsell.when === 'before_payment' && !live.monthlyUpsell.answered
           ? 'monthly_upsell'
           : live.screens.includes('privacy')
           ? 'donor_details'
@@ -291,6 +360,8 @@
     const result = {
       stage,
       checkoutOpen: open,
+      chosen: { amount: state.choice.amount, frequency: state.choice.frequency },
+      ...(stage === 'amount' ? { amountStep: amountStepInfo() } : {}),
       ...live,
       needsDonorInput,
       donation: state.donation,
@@ -324,12 +395,28 @@
       const total = result.total ? `The total is ${result.total}. ` : '';
       return `${total}Please type your card number, expiration and CVC in the checkout on the page, then reply "done" and I will submit the donation.`;
     }
+    if (result.stage === 'amount') {
+      const info = result.amountStep;
+      const money = value => `$${value}`;
+      const list = values => values.map(money).join(', ');
+      const once = `${money(info.recommendedAmount.once)} (the organization's suggested amount; other options ${list(info.amountOptions.once)})`;
+      const monthly = `${money(info.recommendedAmount.monthly)} a month (options ${list(info.amountOptions.monthly)})`;
+      if (typeof state.choice.amount === 'number' && !state.choice.frequency) {
+        return `Would you like to give ${money(state.choice.amount)} once, or become a monthly supporter? The organization suggests ${monthly}. Reply "one-time" or "monthly".`;
+      }
+      if (state.choice.frequency && typeof state.choice.amount !== 'number') {
+        return state.choice.frequency === 'monthly'
+          ? `How much would you like to give each month? The organization suggests ${monthly}.`
+          : `How much would you like to give? The organization suggests ${once}.`;
+      }
+      return `How much would you like to give? The organization suggests ${once}. You can also become a monthly supporter at ${monthly}. Reply with the amount and "one-time" or "monthly".`;
+    }
     if (result.stage === 'monthly_upsell') {
       const options = (result.monthlyUpsell?.options || []).map(option => `$${option.amount}`).join(' or ');
       const amounts = options ? ` at ${options} per month` : '';
       return `Before we continue: the organization asks whether you would like to become a monthly supporter${amounts} instead of a one-time gift. Reply with the monthly amount, or "one-time" to keep your gift as is.`;
     }
-    if (result.stage === 'completed' && result.monthlyUpsell && result.monthlyUpsell.offered && !result.monthlyUpsell.answered) {
+    if (result.stage === 'completed' && result.monthlyUpsell && result.monthlyUpsell.offered && !result.monthlyUpsell.answered && !result.monthlyUpsell.alreadyDeclined) {
       const amount = result.monthlyUpsell.amount ? `$${result.monthlyUpsell.amount}` : 'a small amount';
       const start = result.monthlyUpsell.startDate ? ` starting ${result.monthlyUpsell.startDate}` : '';
       return `Your donation is complete (reference ${result.donation?.id ?? ''}, ${result.donation?.amount ?? ''} ${result.donation?.currency ?? ''}). The organization also offers to become a monthly supporter at ${amount} per month${start}, charged to the same card. Would you like that? Reply "yes" or "no".`;
@@ -340,10 +427,15 @@
   const nextStepFor = result => {
     switch (result.stage) {
       case 'completed':
-        if (result.monthlyUpsell && result.monthlyUpsell.offered && !result.monthlyUpsell.answered) {
+        if (result.monthlyUpsell && result.monthlyUpsell.offered && !result.monthlyUpsell.answered && !result.monthlyUpsell.alreadyDeclined) {
           return 'The donation is complete. In one message tell the donor the result from the donation field and offer the monthly upgrade from monthlyUpsell (amount, start date, same card). Then call fru_respond_to_monthly_upsell with the donor\'s answer.';
         }
+        if (result.monthlyUpsell && result.monthlyUpsell.alreadyDeclined) {
+          return 'The donation is complete. Tell the donor the result from the donation field. The donor already chose a one-time gift, so do not offer monthly again.';
+        }
         return 'The donation is complete. Tell the donor the result from the donation field' + (result.monthlyUpsell?.accepted ? ' and that the monthly donation is set up.' : '.');
+      case 'amount':
+        return 'Ask the donor once with suggestedReply: recommend the organization\'s suggested amount and offer monthly support. Then call fru_set_amount with the amount and frequency the donor chose. Do not pick an amount or frequency for the donor.';
       case 'monthly_upsell':
         return 'The checkout offers to switch this gift to monthly. Ask the donor once (see suggestedReply) and call fru_respond_to_monthly_upsell with their answer; the flow continues from there.';
       case 'processing':
@@ -434,6 +526,10 @@
         continue;
       }
       if (findVisible(SELECTORS.upsellScreen)) {
+        if ((!state.monthlyUpsell || !state.monthlyUpsell.answered) && state.choice.frequency) {
+          // the donor already chose the frequency: do not ask again
+          state.monthlyUpsell = { ...readMonthlyUpsell(), answered: true, accepted: false, autoDeclined: true, reason: 'the donor already chose ' + state.choice.frequency };
+        }
         if (!state.monthlyUpsell || !state.monthlyUpsell.answered) {
           return; // the agent asks the donor and calls fru_respond_to_monthly_upsell
         }
@@ -458,6 +554,9 @@
       }
       const donateButton = findVisible(SELECTORS.donateScreenButton);
       if (donateButton) {
+        if (typeof state.choice.amount !== 'number' || !state.choice.frequency) {
+          return; // the agent asks the donor for amount and frequency, then calls fru_set_amount
+        }
         donateButton.click();
         await waitForScreenChange(donateButton);
         continue;
@@ -493,6 +592,7 @@
         json({
           currency: CONFIG.currency,
           suggestedAmounts: CONFIG.suggestedAmounts,
+          recommendedAmounts: CONFIG.recommendedAmounts,
           frequencies: CONFIG.frequencies,
           paymentMethods: CONFIG.paymentMethods,
           oneShot:
@@ -504,30 +604,29 @@
       name: 'fru_start_donation',
       title: 'Start donation',
       description:
-        'Use this as soon as the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Do not click the page. It opens the donation checkout with the amount and frequency, fills the donor details you pass, walks through the routine steps and stops at the card details. The result says exactly what is still missing and includes a suggestedReply you can send to the donor as is. Pass the donor name and email only if the user stated them in the conversation; otherwise pass nothing: the page reuses the details from the previous donation on this device and the result reports that. On the first donation on a device the result lists the missing details; ask for them once, in one message. Do not ask the user for name or email unless the result lists them in needsDonorInput. Ask the donor at most twice in the whole flow: once for missing details, once to type the card and say "done". Never ask whether to proceed with a test donation: the donor already asked to donate. It never enters card details and never confirms the donation.' +
+        'Use this as soon as the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate", "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Do not click the page. Pass only what the donor said: amount and frequency are optional. Without them the result returns the suggested amounts with the one the organization recommends and the frequencies, with a suggestedReply that asks the donor once for amount and one-time or monthly; then call fru_set_amount. With both given it opens the checkout, fills the donor details you pass, walks through the routine steps and stops at the card details. Every result says exactly what is still missing and includes a suggestedReply you can send to the donor as is. Pass the donor name and email only if the user stated them in the conversation; otherwise pass nothing: the page reuses the details from the previous donation on this device and the result reports that. On the first donation on a device the result lists the missing details; ask for them once, in one message. Do not ask the user for name or email unless the result lists them in needsDonorInput. Ask the donor at most twice in the whole flow: once for missing details, once to type the card and say "done". Never ask whether to proceed with a test donation: the donor already asked to donate. It never enters card details and never confirms the donation.' +
         KEEP_DEFAULTS +
         NO_PAGE_READING,
       inputSchema: {
         type: 'object',
         properties: {
-          amount: { type: 'number', description: 'Donation amount in major currency units, for example 25.' },
+          amount: { type: 'number', description: 'Donation amount in major currency units, only if the donor named one. Omit it and the result returns the suggested amounts with the recommended one.' },
           currency: { type: 'string', description: 'ISO 4217 code. Use USD when the user writes $.' },
           frequency: {
             type: 'string',
             description:
-              'once or monthly. Use monthly when the user asks for a subscription or a recurring donation, for example "every month", "оформи подписку". Otherwise omit it and a one-time donation is used.',
+              'once or monthly, only if the donor said so ("one-time", "every month", "оформи подписку"). Omit it otherwise and the result asks the donor whether to give once or become a monthly supporter.',
           },
           ...donorSchema,
         },
-        required: ['amount'],
       },
       execute: async input => {
         const params = parse(input);
-        if (typeof params.amount !== 'number' || params.amount <= 0) {
+        if (params.amount !== undefined && (typeof params.amount !== 'number' || params.amount <= 0)) {
           return json({ started: false, reason: 'Amount must be a positive number.' });
         }
-        const frequency = params.frequency ?? CONFIG.frequencies[0];
-        if (!CONFIG.frequencies.includes(frequency)) {
+        const frequency = params.frequency;
+        if (frequency !== undefined && !CONFIG.frequencies.includes(frequency)) {
           return json({
             started: false,
             reason: `Frequency "${frequency}" is not available for this campaign.`,
@@ -535,7 +634,8 @@
           });
         }
         const currency = (params.currency ?? CONFIG.currency).toUpperCase();
-        const requested = { amount: params.amount, currency, frequency };
+        const requested = { amount: params.amount, currency, frequency: frequency ?? 'once' };
+        state.choice = { amount: params.amount, frequency };
         if (state.open || isCheckoutVisible()) {
           if (sameSession(state.session, requested) && !state.donation) {
             await advance(withRememberedDonor(params).donor);
@@ -554,15 +654,46 @@
         }
         await advance(donor);
         rememberDonor(donor);
-        return json(
-          snapshot({
-            started: true,
-            amount: params.amount,
-            currency,
-            frequency,
-            donorDetailsSource: donorSource,
-          })
-        );
+        return json(snapshot({ started: true, currency, donorDetailsSource: donorSource }));
+      },
+    },
+    {
+      name: 'fru_set_amount',
+      title: 'Set amount and frequency',
+      description:
+        'Use this after fru_start_donation returned stage "amount": passes the amount and frequency the donor chose and continues to the next step. Both are required and must come from the donor\'s answer; the organization\'s suggested amount is a recommendation, not a default to pass on your own.' +
+        NO_PAGE_READING,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          amount: { type: 'number', description: 'Amount in major currency units the donor chose, for example 25.' },
+          frequency: { type: 'string', description: 'once or monthly, as the donor chose.' },
+        },
+        required: ['amount', 'frequency'],
+      },
+      execute: async input => {
+        const params = parse(input);
+        if (typeof params.amount !== 'number' || params.amount <= 0 || !CONFIG.frequencies.includes(params.frequency)) {
+          return json(snapshot({ reason: 'Pass a positive amount and frequency once or monthly.', availableFrequencies: CONFIG.frequencies }));
+        }
+        if (!(state.open || isCheckoutVisible())) {
+          return json(snapshot({ reason: 'The checkout is not open. Call fru_start_donation first.' }));
+        }
+        state.choice = { amount: params.amount, frequency: params.frequency };
+        state.session = { ...(state.session || { currency: CONFIG.currency }), amount: params.amount, frequency: params.frequency };
+        let applied = false;
+        if (findVisible(SELECTORS.amountSection)) {
+          applied = await chooseOnAmountScreen(params.amount, params.frequency);
+        }
+        if (!applied) {
+          await closeCheckout();
+          state.session = { amount: params.amount, currency: CONFIG.currency, frequency: params.frequency };
+          if (!(await openCheckout({ amount: params.amount }, withRememberedDonor({}).donor, CONFIG.currency, params.frequency))) {
+            return json(snapshot({ reason: 'The checkout did not reopen with the chosen amount.' }));
+          }
+        }
+        await advance(withRememberedDonor({}).donor);
+        return json(snapshot({ amountApplied: true, appliedOnScreen: applied }));
       },
     },
     {
