@@ -21,11 +21,20 @@
   window.__fruWebMcpDemo = true;
 
   const KEEP_DEFAULTS =
-    ' Never change, and never offer to change, checkout options the donor did not ask for (currency, frequency, covering transaction costs). Do not ask the donor to confirm the amount again.';
+    ' Never change currency or frequency unless the donor asks. Covering transaction costs is on by default: state it with the total and apply the donor\'s wish through fru_set_cover_fee only if they say so; do not ask about it as a question. Do not ask the donor to confirm the amount again.';
   const CARD_NOTE =
     'Card number, expiration and CVC live in Stripe iframes and can only be typed by the donor in the checkout on this page.';
 
-  const state = { open: false, lastEvent: null, donation: null, submitting: false, lastError: null, session: null };
+  const state = {
+    open: false,
+    lastEvent: null,
+    donation: null,
+    submitting: false,
+    lastError: null,
+    session: null,
+    coverFeeWanted: undefined,
+    monthlyUpsell: null,
+  };
   const json = payload => ({ content: [{ type: 'text', text: JSON.stringify(payload) }] });
   const parse = input => {
     if (typeof input === 'string') {
@@ -103,6 +112,13 @@
     donateButton: '[data-qa="cc-button"]',
     donateButtonError: '[data-qa="cc-button-error-icon"]',
     closeButton: '[data-qa="global-close"]',
+    upsellOptionButtons: '[data-qa="active-screen-upsell"] button[data-qa^="upsell-"]:not([data-qa="upsell-one-time"])',
+    postUpsellBlock: '[data-qa="post-donation-upsell-block"]',
+    postUpsellAmountInput: '[data-qa="post-donation-amount-input"]',
+    postUpsellAmountValue: '[data-qa="post-donation-amount-input-value"]',
+    postUpsellConfirm: '[data-qa="post-donation-upsell-confirm"]',
+    postUpsellDecline: '[data-qa="post-donation-not-this-time"]',
+    thankYouScreen: '[data-qa="active-screen-thank-you"]',
     invalidField: '[aria-invalid="true"]',
     errorTooltipTrigger: '[data-qa$="tooltip-error-trigger"]',
     tooltipContent: '.ui-tooltip-content, [role="tooltip"]',
@@ -193,16 +209,59 @@
     return { shown: true, complete, invalid };
   };
 
+  const parseMoney = value => {
+    const match = (value || '').replace(/,/g, '').match(/(\d+(?:\.\d+)?)/);
+    return match ? Number(match[1]) : null;
+  };
+  const applyCoverFee = async wanted => {
+    if (typeof wanted !== 'boolean') {
+      return;
+    }
+    const fee = findVisible(SELECTORS.coverFeeCheckbox);
+    if (fee && fee.checked !== wanted) {
+      fee.click();
+      await sleep(400);
+    }
+  };
+  const readMonthlyUpsell = () => {
+    const block = findVisible(SELECTORS.postUpsellBlock);
+    if (block) {
+      const amount = parseMoney(text(findVisible(SELECTORS.postUpsellAmountValue)) || findVisible(SELECTORS.postUpsellAmountInput)?.value);
+      const start = text(block).match(/starting (?:on )?([A-Z][a-z]{2,8} \d{1,2})/);
+      return { offered: true, when: 'after_donation', amount, startDate: start ? start[1] : undefined, text: text(block).slice(0, 300) };
+    }
+    if (state.donation) {
+      return state.monthlyUpsell && state.monthlyUpsell.when === 'after_donation' ? state.monthlyUpsell : null;
+    }
+    const screen = findVisible(SELECTORS.upsellScreen);
+    if (screen) {
+      const options = findAllVisible(SELECTORS.upsellOptionButtons)
+        .map(button => ({ amount: parseMoney(text(button)), label: text(button) }))
+        .filter(option => option.amount !== null);
+      return { offered: true, when: 'before_payment', options, text: text(screen).slice(0, 300) };
+    }
+    if (state.monthlyUpsell) {
+      return state.monthlyUpsell;
+    }
+    return null;
+  };
+
   const readCheckout = () => {
     const screens = [...(checkoutDocument()?.querySelectorAll(SELECTORS.activeScreen) ?? [])]
       .filter(isVisible)
       .map(element => element.getAttribute('data-qa').replace('active-screen-', ''));
     const fee = findVisible(SELECTORS.coverFeeCheckbox);
     const card = cardStatus();
+    const total = text(findVisible(SELECTORS.totalLabel)) || undefined;
+    const totalNumber = parseMoney(total);
+    const feeAmount =
+      fee && fee.checked && totalNumber !== null && state.session ? Math.round((totalNumber - state.session.amount) * 100) / 100 : undefined;
     return {
       screens,
       coverFee: fee ? fee.checked : undefined,
-      total: text(findVisible(SELECTORS.totalLabel)) || undefined,
+      feeAmount: feeAmount && feeAmount > 0 ? feeAmount : undefined,
+      total,
+      monthlyUpsell: readMonthlyUpsell() || undefined,
       cardDetailsShown: card.shown,
       cardDetailsComplete: card.complete,
       cardDetailsInvalid: card.invalid || undefined,
@@ -221,7 +280,9 @@
     } else if (open) {
       stage = live.cardDetailsShown
         ? 'card_details'
-        : live.screens.includes('privacy')
+        : live.monthlyUpsell && live.monthlyUpsell.when === 'before_payment' && !live.monthlyUpsell.answered
+          ? 'monthly_upsell'
+          : live.screens.includes('privacy')
           ? 'donor_details'
           : live.screens.includes('payment-method')
             ? 'payment_method'
@@ -256,8 +317,23 @@
       return null;
     }
     if (result.stage === 'card_details' && !result.needsDonorInput.length && !result.cardDetailsComplete) {
-      const total = result.total ? `The total is ${result.total}` + (result.coverFee ? ' including transaction costs' : '') + '. ' : '';
+      const symbol = (result.total || '').match(/^[^\d]*/)?.[0] || '';
+      const fee =
+        result.coverFee && result.feeAmount
+          ? ` This includes ${symbol}${result.feeAmount.toFixed(2)} in transaction costs so the organization receives your full gift; say "don't cover the fee" if you prefer not to.`
+          : '';
+      const total = result.total ? `The total is ${result.total}.${fee} ` : '';
       return `${total}Please type your card number, expiration and CVC in the checkout on the page, then reply "done" and I will submit the donation.`;
+    }
+    if (result.stage === 'monthly_upsell') {
+      const options = (result.monthlyUpsell?.options || []).map(option => `$${option.amount}`).join(' or ');
+      const amounts = options ? ` at ${options} per month` : '';
+      return `Before we continue: the organization asks whether you would like to become a monthly supporter${amounts} instead of a one-time gift. Reply with the monthly amount, or "one-time" to keep your gift as is.`;
+    }
+    if (result.stage === 'completed' && result.monthlyUpsell && result.monthlyUpsell.offered && !result.monthlyUpsell.answered) {
+      const amount = result.monthlyUpsell.amount ? `$${result.monthlyUpsell.amount}` : 'a small amount';
+      const start = result.monthlyUpsell.startDate ? ` starting ${result.monthlyUpsell.startDate}` : '';
+      return `Your donation is complete (reference ${result.donation?.id ?? ''}, ${result.donation?.amount ?? ''} ${result.donation?.currency ?? ''}). The organization also offers to become a monthly supporter at ${amount} per month${start}, charged to the same card. Would you like that? Reply "yes" or "no".`;
     }
     return null;
   };
@@ -265,7 +341,12 @@
   const nextStepFor = result => {
     switch (result.stage) {
       case 'completed':
-        return 'The donation is complete. Tell the donor the result from the donation field.';
+        if (result.monthlyUpsell && result.monthlyUpsell.offered && !result.monthlyUpsell.answered) {
+          return 'The donation is complete. In one message tell the donor the result from the donation field and offer the monthly upgrade from monthlyUpsell (amount, start date, same card). Then call fru_respond_to_monthly_upsell with the donor\'s answer.';
+        }
+        return 'The donation is complete. Tell the donor the result from the donation field' + (result.monthlyUpsell?.accepted ? ' and that the monthly donation is set up.' : '.');
+      case 'monthly_upsell':
+        return 'The checkout offers to switch this gift to monthly. Ask the donor once (see suggestedReply) and call fru_respond_to_monthly_upsell with their answer; the flow continues from there.';
       case 'processing':
         return 'The payment is being processed or needs bank authentication in the checkout. Call fru_get_donation_status again in a few seconds.';
       case 'card_details':
@@ -318,12 +399,9 @@
     for (let step = 0; step < 8; step++) {
       if (findVisible(SELECTORS.cardBlock) && findVisible(SELECTORS.stripeCardFrame)) {
         if (typeof donor.coverFee === 'boolean') {
-          const fee = findVisible(SELECTORS.coverFeeCheckbox);
-          if (fee && fee.checked !== donor.coverFee) {
-            fee.click();
-            await sleep(400);
-          }
+          state.coverFeeWanted = donor.coverFee;
         }
+        await applyCoverFee(state.coverFeeWanted);
         return;
       }
       if (findVisible(SELECTORS.paymentMethodScreen) && !findVisible(SELECTORS.privacyScreen)) {
@@ -357,10 +435,25 @@
         continue;
       }
       if (findVisible(SELECTORS.upsellScreen)) {
-        const keepOneTime = findVisible(SELECTORS.keepOneTimeButton);
-        keepOneTime?.click();
-        if (keepOneTime) {
-          await waitForScreenChange(keepOneTime);
+        if (!state.monthlyUpsell || !state.monthlyUpsell.answered) {
+          return; // the agent asks the donor and calls fru_respond_to_monthly_upsell
+        }
+        let button = findVisible(SELECTORS.keepOneTimeButton);
+        if (state.monthlyUpsell.accepted) {
+          const wanted = state.monthlyUpsell.amount;
+          button =
+            findAllVisible(SELECTORS.upsellOptionButtons).find(candidate => parseMoney(text(candidate)) === wanted) ??
+            findAllVisible(SELECTORS.upsellOptionButtons)[0] ??
+            button;
+          const chosen = parseMoney(text(button));
+          if (chosen !== null && state.session) {
+            state.session = { ...state.session, amount: chosen, frequency: 'monthly' };
+            state.monthlyUpsell.amount = chosen;
+          }
+        }
+        button?.click();
+        if (button) {
+          await waitForScreenChange(button);
         }
         continue;
       }
@@ -452,6 +545,8 @@
         }
         state.donation = null;
         state.lastError = null;
+        state.monthlyUpsell = null;
+        state.coverFeeWanted = typeof params.coverFee === 'boolean' ? params.coverFee : undefined;
         state.session = requested;
         const { donor, donorSource } = withRememberedDonor(params);
         if (!(await openCheckout(params, donor, currency, frequency))) {
@@ -485,6 +580,92 @@
         const { donor } = withRememberedDonor(parse(input));
         await advance(donor);
         rememberDonor(donor);
+        return json(snapshot());
+      },
+    },
+    {
+      name: 'fru_set_cover_fee',
+      title: 'Set transaction cost coverage',
+      description:
+        'Turns covering transaction costs on or off. Coverage is on by default so the organization receives the full gift; call this only when the donor says they do not want to cover the fee (false) or changes their mind back (true). Works at any step; the result shows the new total.' +
+        NO_PAGE_READING,
+      inputSchema: {
+        type: 'object',
+        properties: { cover: { type: 'boolean', description: 'true to cover transaction costs, false to pay only the donation amount.' } },
+        required: ['cover'],
+      },
+      execute: async input => {
+        const params = parse(input);
+        if (typeof params.cover !== 'boolean') {
+          return json(snapshot({ reason: 'Pass cover: true or false.' }));
+        }
+        state.coverFeeWanted = params.cover;
+        if (!(state.open || isCheckoutVisible())) {
+          return json(snapshot({ reason: 'The checkout is not open yet; the choice will be applied when it reaches the payment step.' }));
+        }
+        await applyCoverFee(params.cover);
+        return json(snapshot({ coverFeeApplied: findVisible(SELECTORS.coverFeeCheckbox) ? findVisible(SELECTORS.coverFeeCheckbox).checked === params.cover : false }));
+      },
+    },
+    {
+      name: 'fru_respond_to_monthly_upsell',
+      title: 'Answer the monthly supporter offer',
+      description:
+        'Passes the donor\'s answer to the monthly supporter offer reported in monthlyUpsell: before payment (switch this gift to monthly) or after a completed donation (add a monthly donation on the same card). accept: true starts the monthly donation, false declines it. Call it only with an answer the donor gave in the conversation.' +
+        NO_PAGE_READING,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          accept: { type: 'boolean', description: 'true if the donor wants the monthly donation, false to decline.' },
+          amount: { type: 'number', description: 'Monthly amount, only if the donor named one different from the offer.' },
+        },
+        required: ['accept'],
+      },
+      annotations: { consequentialHint: true },
+      execute: async input => {
+        const params = parse(input);
+        if (typeof params.accept !== 'boolean') {
+          return json(snapshot({ reason: 'Pass accept: true or false.' }));
+        }
+        const offer = readMonthlyUpsell();
+        if (!offer || !offer.offered || offer.answered) {
+          return json(snapshot({ reason: 'No monthly offer is open right now.' }));
+        }
+        if (offer.when === 'after_donation') {
+          if (params.accept) {
+            const amountInput = findVisible(SELECTORS.postUpsellAmountInput);
+            if (amountInput && typeof params.amount === 'number' && params.amount > 0) {
+              fillInput(amountInput, String(params.amount));
+              await sleep(300);
+            }
+            findVisible(SELECTORS.postUpsellConfirm)?.click();
+          } else {
+            findVisible(SELECTORS.postUpsellDecline)?.click();
+          }
+          await waitFor(() => !findVisible(SELECTORS.postUpsellBlock), 15000);
+          const thanks = text(findVisible(SELECTORS.thankYouScreen));
+          const confirmed = params.accept && /monthly/i.test(thanks) && !findVisible(SELECTORS.postUpsellBlock);
+          state.monthlyUpsell = {
+            offered: true,
+            when: 'after_donation',
+            answered: true,
+            accepted: params.accept,
+            confirmed: params.accept ? confirmed : undefined,
+            amount: params.amount ?? offer.amount,
+            startDate: offer.startDate,
+            text: thanks.slice(0, 300),
+          };
+          return json(snapshot({ monthlyUpsellResult: state.monthlyUpsell }));
+        }
+        if (params.accept && (offer.options || []).length > 1 && !(offer.options || []).some(option => option.amount === params.amount)) {
+          return json(
+            snapshot({
+              reason: 'Pass the monthly amount the donor chose: ' + offer.options.map(option => `$${option.amount}`).join(' or ') + '.',
+            })
+          );
+        }
+        state.monthlyUpsell = { ...offer, answered: true, accepted: params.accept, amount: params.accept ? params.amount ?? offer.options?.[0]?.amount : undefined };
+        await advance(withRememberedDonor({}).donor);
         return json(snapshot());
       },
     },
@@ -533,6 +714,9 @@
           return null;
         }, 45000);
         state.submitting = outcome === null;
+        if (outcome === 'completed') {
+          await waitFor(() => findVisible(SELECTORS.postUpsellBlock) || findVisible(SELECTORS.thankYouScreen), 4000);
+        }
         return json(
           snapshot({
             submitted: outcome === 'completed',
