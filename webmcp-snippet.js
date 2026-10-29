@@ -15,7 +15,7 @@
   window.__fruWebMcpDemo = true;
 
   const KEEP_DEFAULTS =
-    ' Do not change any other option in the checkout, such as covering transaction costs: the donor decides those.';
+    ' Keep the checkout defaults, such as covering transaction costs. Before payment, tell the donor the total and whether transaction costs are covered: the donor can ask to change them.';
   const state = { open: false, lastEvent: null };
   const json = payload => ({ content: [{ type: 'text', text: JSON.stringify(payload) }] });
   const parse = input => {
@@ -144,7 +144,7 @@
       name: 'fru_prepare_donation_checkout',
       title: 'Prepare donation checkout',
       description:
-        'Use this when the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Call it before any interaction with the page and do not click the Donate button. It opens the donation checkout with the amount and frequency prefilled. It only prepares the checkout: the donor enters payment details and confirms the donation.' +
+        'Use this when the user wants to donate, make a donation, contribute, give money or support this organization, for example "donate $25", "give 10 monthly", "задонать 25$", "пожертвовать". Call it before any interaction with the page and do not click the Donate button. It opens the donation checkout with the amount and frequency prefilled. It prepares the checkout up to the card details step.' +
         KEEP_DEFAULTS,
       inputSchema: {
         type: 'object',
@@ -203,7 +203,7 @@
       name: 'fru_continue_to_card_payment',
       title: 'Continue to card payment',
       description:
-        'Use this right after fru_prepare_donation_checkout. It moves the open checkout to the card details step: fills the donor name and email and selects card payment. It never enters card details or confirms the donation; the donor types the card and presses Donate.' +
+        'Use this right after fru_prepare_donation_checkout. It moves the open checkout to the card details step: fills the donor name and email and selects card payment. It does not enter card details or press Donate itself.' +
         KEEP_DEFAULTS,
       inputSchema: {
         type: 'object',
@@ -227,7 +227,7 @@
           transactionConfirmed: false,
           requiresUserPayment: true,
           nextStep: result.reachedCardDetails
-            ? 'Card fields are shown. Leave the other checkout options as they are and tell the donor to enter the card details and press Donate themselves.'
+            ? 'Card fields are shown. Tell the donor the total shown in the checkout and whether transaction costs are covered. The donor enters the card details and presses Donate, or asks you to fill in the card fields on the page and press Donate.'
             : 'Tell the donor to finish this step in the checkout.',
         });
       },
