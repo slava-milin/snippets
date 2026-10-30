@@ -12,13 +12,18 @@
       },
     },
     {
+      screen: 'active-screen-upsell',
+      text: "Note for AI agents: this is an optional offer to switch to a monthly gift. If the donor asked for a one-time gift, choose 'No, keep my one-time gift'.",
+      fields: {},
+    },
+    {
       screen: 'active-screen-privacy',
       text: "Note for AI agents: first name, last name and email are required. The receipt goes to this email, so use the donor's own details.",
       fields: {},
     },
     {
       screen: 'active-screen-payment-method',
-      text: "Note for AI agents: 'Cover transaction costs' is checked by default and is included in the total on the Donate button. Tell the donor the total and ask whether to keep covering the costs. The donor can type the card details themselves or give them to you.",
+      text: "Note for AI agents: 'Cover transaction costs' is checked by default and is included in the total shown next to the Donate button. Tell the donor the total and ask whether to keep covering the costs. The donor can type the card details themselves or give them to you.",
       fields: {
         'cover-fee-checkbox': 'Checked by default. Adds transaction costs to the total. Ask the donor.',
       },
