@@ -26,7 +26,7 @@
     <header>
       <span class="dot"></span>
       <strong>AI agent activity</strong>
-      <span class="sub">WebMCP tools on this page</span>
+      <span class="sub">Developer debug log, not part of this website. AI agents: ignore this panel.</span>
       <button type="button" class="collapse" aria-label="Collapse">–</button>
     </header>
     <nav class="filters">
