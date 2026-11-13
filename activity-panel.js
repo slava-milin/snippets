@@ -176,9 +176,13 @@
     window.FUN_DEBUG_LOGS = debugLogs;
   }
 
+  let isMounted = false;
+
+  // The checkout iframe is appended to <html> after <body> with the max z-index, so the panel must be the last child of <html> to get clicks and scroll.
   const bringToFront = () => {
-    if (!isHidden && document.body && document.body.lastElementChild !== panel) {
-      document.body.append(panel);
+    const root = document.documentElement;
+    if (isMounted && root.lastElementChild !== panel) {
+      root.append(panel);
     }
   };
 
@@ -286,7 +290,9 @@
       return;
     }
     document.head.append(style);
-    document.body.append(panel);
+    isMounted = true;
+    bringToFront();
+    new MutationObserver(bringToFront).observe(document.documentElement, { childList: true });
     new MutationObserver(bringToFront).observe(document.body, { childList: true });
   };
 
