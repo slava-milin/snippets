@@ -1,10 +1,14 @@
 // Demo panel that shows every WebMCP tool call the AI agent makes on this page.
 // Load it before the Fundraise Up embed script: it wraps document.modelContext.registerTool,
 // so tools registered later (by embed and by the checkout) report their calls here.
-// ?panel=off hides the panel; window.__fruActivity keeps the raw log.
+// It also shows Fundraise Up tracking events: it sets the fundraiseup_debug cookie, so embed logs every
+// event to window.FUN_DEBUG_LOGS, and renders them next to the tool calls. Click an item to see its data.
+// ?panel=off hides the panel; ?tracking=off skips tracking events; window.__fruActivity keeps the raw log.
 (() => {
   const modelContext = document.modelContext;
-  const isHidden = new URLSearchParams(location.search).get('panel') === 'off';
+  const params = new URLSearchParams(location.search);
+  const isHidden = params.get('panel') === 'off';
+  const showTracking = params.get('tracking') !== 'off';
   window.__fruActivity = [];
 
   const panel = document.createElement('aside');
@@ -14,8 +18,13 @@
       <span class="dot"></span>
       <strong>AI agent activity</strong>
       <span class="sub">WebMCP tools on this page</span>
-      <button type="button" aria-label="Collapse">–</button>
+      <button type="button" class="collapse" aria-label="Collapse">–</button>
     </header>
+    <nav class="filters">
+      <button type="button" data-filter="all" class="active">All</button>
+      <button type="button" data-filter="agent">Agent</button>
+      <button type="button" data-filter="tracking">Tracking</button>
+    </nav>
     <ol></ol>
     <footer></footer>`;
 
@@ -25,11 +34,25 @@
       display: flex; flex-direction: column; background: #fff; color: #111827; border-radius: 14px;
       box-shadow: 0 12px 32px rgba(0,0,0,.28); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
     #fru-agent-activity.collapsed { bottom: auto; }
-    #fru-agent-activity.collapsed ol, #fru-agent-activity.collapsed footer { display: none; }
+    #fru-agent-activity.collapsed ol, #fru-agent-activity.collapsed footer, #fru-agent-activity.collapsed .filters { display: none; }
+    #fru-agent-activity .filters { display: flex; gap: 6px; padding: 8px 12px 0; }
+    #fru-agent-activity .filters button { font: 12px/1 inherit; padding: 5px 10px; border-radius: 999px; border: 1px solid #e5e7eb;
+      background: #fff; color: #374151; cursor: pointer; }
+    #fru-agent-activity .filters button.active { background: #111827; border-color: #111827; color: #f9fafb; }
+    #fru-agent-activity ol.only-agent li.track, #fru-agent-activity ol.only-tracking li:not(.track) { display: none; }
+    #fru-agent-activity li.track { background: #f5f3ff; font: 12px/1.4 ui-monospace, Menlo, monospace; }
+    #fru-agent-activity li.track .badge { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px;
+      background: #7c3aed; color: #fff; font-size: 11px; }
+    #fru-agent-activity details summary { cursor: pointer; list-style: none; }
+    #fru-agent-activity details summary::-webkit-details-marker { display: none; }
+    #fru-agent-activity details summary::before { content: '▸ '; opacity: .5; }
+    #fru-agent-activity details[open] summary::before { content: '▾ '; }
+    #fru-agent-activity details pre { margin: 6px 0 0; padding: 8px; max-height: 320px; overflow: auto; background: rgba(255,255,255,.7);
+      border-radius: 6px; font: 11px/1.4 ui-monospace, Menlo, monospace; white-space: pre; }
     #fru-agent-activity header { display: grid; grid-template-columns: 12px 1fr auto; column-gap: 8px; align-items: center;
       padding: 12px 14px; background: #111827; color: #f9fafb; }
     #fru-agent-activity header .sub { grid-column: 2; font-size: 11px; opacity: .7; }
-    #fru-agent-activity header button { grid-row: 1 / span 2; grid-column: 3; background: none; border: 0; color: inherit;
+    #fru-agent-activity header button.collapse { grid-row: 1 / span 2; grid-column: 3; background: none; border: 0; color: inherit;
       font-size: 18px; cursor: pointer; }
     #fru-agent-activity .dot { grid-row: 1 / span 2; width: 10px; height: 10px; border-radius: 50%; background: #9ca3af; }
     #fru-agent-activity.live .dot { background: #22c55e; }
@@ -46,14 +69,86 @@
   const list = panel.querySelector('ol');
   const footer = panel.querySelector('footer');
 
-  const add = (kind, text) => {
+  const toJson = value => {
+    const seen = new WeakSet();
+    try {
+      return JSON.stringify(
+        value,
+        (_, item) => {
+          if (item && typeof item === 'object') {
+            if (seen.has(item)) {
+              return '[circular]';
+            }
+            seen.add(item);
+          }
+          return item;
+        },
+        2
+      );
+    } catch (error) {
+      return String(error);
+    }
+  };
+
+  const add = (kind, text, data, badge) => {
+    const isPinnedToBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
     const item = document.createElement('li');
     item.className = kind;
-    item.textContent = text;
+    if (data === undefined) {
+      item.textContent = text;
+    } else {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = text;
+      if (badge) {
+        const label = document.createElement('span');
+        label.className = 'badge';
+        label.textContent = badge;
+        summary.append(label);
+      }
+      const body = document.createElement('pre');
+      details.addEventListener('toggle', () => {
+        if (details.open && !body.textContent) {
+          body.textContent = toJson(data);
+        }
+      });
+      details.append(summary, body);
+      item.append(details);
+    }
     list.append(item);
-    list.scrollTop = list.scrollHeight;
+    if (isPinnedToBottom) {
+      list.scrollTop = list.scrollHeight;
+    }
     bringToFront();
   };
+
+  const addTrackingEvent = ({ name, content }) => {
+    if (!/(^|:)Tracking:/.test(name)) {
+      return;
+    }
+    const payload = Array.isArray(content) ? content[0] : content;
+    const eventName = name.replace(/^.*Tracking:/, '');
+    window.__fruActivity.push({ tracking: eventName, payload });
+    add('track', `📊 ${eventName}`, payload, payload?.customEventType);
+  };
+
+  if (showTracking) {
+    if (!/(^|; )fundraiseup_debug=/.test(document.cookie)) {
+      document.cookie = 'fundraiseup_debug=1; path=/; max-age=86400; SameSite=Lax';
+    }
+    const debugLogs = [];
+    debugLogs.push = (...items) => {
+      items.forEach(item => {
+        try {
+          addTrackingEvent(item);
+        } catch (error) {
+          console.warn(error);
+        }
+      });
+      return Array.prototype.push.apply(debugLogs, items);
+    };
+    window.FUN_DEBUG_LOGS = debugLogs;
+  }
 
   const bringToFront = () => {
     if (!isHidden && document.body && document.body.lastElementChild !== panel) {
@@ -119,13 +214,13 @@
     ...tool,
     execute: async (input, client) => {
       const startedAt = performance.now();
-      add('call', `→ ${tool.name} ${formatInput(input)}`);
+      add('call', `→ ${tool.name} ${formatInput(input)}`, input);
       const result = await tool.execute(input, client);
       const response = parseResult(result);
       const durationMs = Math.round(performance.now() - startedAt);
       window.__fruActivity.push({ tool: tool.name, input, response, durationMs });
       if (response) {
-        add(resultKind(response.status), `← ${describeResult(response)} · ${durationMs} ms`);
+        add(resultKind(response.status), `← ${describeResult(response)} · ${durationMs} ms`, response);
         if (response.donorMessage) {
           add('message', response.donorMessage);
         }
@@ -150,7 +245,14 @@
     setInterval(refreshTools, 1000);
   }
 
-  panel.querySelector('button').addEventListener('click', () => panel.classList.toggle('collapsed'));
+  panel.querySelector('button.collapse').addEventListener('click', () => panel.classList.toggle('collapsed'));
+  panel.querySelectorAll('.filters button').forEach(button =>
+    button.addEventListener('click', () => {
+      panel.querySelectorAll('.filters button').forEach(other => other.classList.toggle('active', other === button));
+      list.classList.toggle('only-agent', button.dataset.filter === 'agent');
+      list.classList.toggle('only-tracking', button.dataset.filter === 'tracking');
+    })
+  );
 
   const mount = () => {
     if (isHidden) {
