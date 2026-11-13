@@ -143,7 +143,9 @@
     window.__fruActivity.push({ tracking: eventName, payload });
     const isKey = KEY_EVENTS.includes(eventName) || payload?.customEventType === 'webmcpToolCall';
     const tags = Array.isArray(payload?.eventTags) ? payload.eventTags : [];
-    add(isKey ? 'track key' : 'track', `📊 ${eventName}`, payload, payload?.customEventType, tags);
+    const { eventType, customEventType, customEventData, elementType, elementKey, widgetKey } = payload ?? {};
+    const shown = { eventType, eventTags: tags, customEventType, customEventData, elementType, elementKey, widgetKey, ...payload };
+    add(isKey ? 'track key' : 'track', `📊 ${eventName}`, shown, customEventType, tags);
   };
 
   if (showTracking) {
