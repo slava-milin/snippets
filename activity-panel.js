@@ -3,7 +3,7 @@
 // so tools registered later (by embed and by the checkout) report their calls here.
 // It also shows Fundraise Up tracking events: it sets the fundraiseup_debug cookie, so embed logs every
 // event to window.FUN_DEBUG_LOGS, and renders them next to the tool calls. Click an item to see its data.
-// ?panel=off removes the panel; ?panel=hidden keeps logging but hides it until Ctrl+Shift+A, so a browser agent
+// The panel starts collapsed (?panel=open starts it expanded); ?panel=off removes the panel; ?panel=hidden keeps logging but hides it until Ctrl+Shift+A, so a browser agent
 // doesn't read or see it; ?tracking=off skips tracking events; window.__fruActivity keeps the raw log.
 (() => {
   const modelContext = document.modelContext;
@@ -17,6 +17,7 @@
   panel.setAttribute('aria-hidden', 'true');
   panel.setAttribute('data-nosnippet', '');
   panel.hidden = params.get('panel') === 'hidden';
+  panel.classList.toggle('collapsed', params.get('panel') !== 'open');
   document.addEventListener('keydown', event => {
     if (event.ctrlKey && event.shiftKey && event.code === 'KeyA') {
       panel.hidden = !panel.hidden;
