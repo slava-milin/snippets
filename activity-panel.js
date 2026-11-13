@@ -94,6 +94,14 @@
     }
   };
 
+  const safeParse = text => {
+    try {
+      return JSON.parse(text);
+    } catch (_) {
+      return text;
+    }
+  };
+
   const KEY_EVENTS = ['pageView', 'elementOpenCheckout', 'checkoutView', 'donationComplete'];
 
   const add = (kind, text, data, badge, tags = []) => {
@@ -144,7 +152,9 @@
     const isKey = KEY_EVENTS.includes(eventName) || payload?.customEventType === 'webmcpToolCall';
     const tags = Array.isArray(payload?.eventTags) ? payload.eventTags : [];
     const { eventType, customEventType, customEventData, elementType, elementKey, widgetKey } = payload ?? {};
-    const shown = { eventType, eventTags: tags, customEventType, customEventData, elementType, elementKey, widgetKey, ...payload };
+    const parsedData = typeof customEventData === 'string' ? safeParse(customEventData) : customEventData;
+    const shown = { eventType, eventTags: tags, customEventType, customEventData: parsedData, elementType, elementKey, widgetKey };
+    Object.assign(shown, payload, { customEventData: parsedData });
     add(isKey ? 'track key' : 'track', `📊 ${eventName}`, shown, customEventType, tags);
   };
 
