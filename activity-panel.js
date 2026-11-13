@@ -3,7 +3,8 @@
 // so tools registered later (by embed and by the checkout) report their calls here.
 // It also shows Fundraise Up tracking events: it sets the fundraiseup_debug cookie, so embed logs every
 // event to window.FUN_DEBUG_LOGS, and renders them next to the tool calls. Click an item to see its data.
-// ?panel=off hides the panel; ?tracking=off skips tracking events; window.__fruActivity keeps the raw log.
+// ?panel=off removes the panel; ?panel=hidden keeps logging but hides it until Ctrl+Shift+A, so a browser agent
+// doesn't read or see it; ?tracking=off skips tracking events; window.__fruActivity keeps the raw log.
 (() => {
   const modelContext = document.modelContext;
   const params = new URLSearchParams(location.search);
@@ -13,6 +14,14 @@
 
   const panel = document.createElement('aside');
   panel.id = 'fru-agent-activity';
+  panel.setAttribute('aria-hidden', 'true');
+  panel.setAttribute('data-nosnippet', '');
+  panel.hidden = params.get('panel') === 'hidden';
+  document.addEventListener('keydown', event => {
+    if (event.ctrlKey && event.shiftKey && event.code === 'KeyA') {
+      panel.hidden = !panel.hidden;
+    }
+  });
   panel.innerHTML = `
     <header>
       <span class="dot"></span>
@@ -34,6 +43,7 @@
     #fru-agent-activity { position: fixed; top: 16px; left: 16px; bottom: 16px; width: 340px; z-index: 2147483647;
       display: flex; flex-direction: column; background: #fff; color: #111827; border-radius: 14px;
       box-shadow: 0 12px 32px rgba(0,0,0,.28); font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+    #fru-agent-activity[hidden] { display: none; }
     #fru-agent-activity.collapsed { bottom: auto; }
     #fru-agent-activity.collapsed ol, #fru-agent-activity.collapsed footer, #fru-agent-activity.collapsed .filters { display: none; }
     #fru-agent-activity .filters { display: flex; gap: 6px; padding: 8px 12px 0; }
