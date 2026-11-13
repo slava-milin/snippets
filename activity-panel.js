@@ -22,6 +22,7 @@
     </header>
     <nav class="filters">
       <button type="button" data-filter="all" class="active">All</button>
+      <button type="button" data-filter="key">Key events</button>
       <button type="button" data-filter="agent">Agent</button>
       <button type="button" data-filter="tracking">Tracking</button>
     </nav>
@@ -39,10 +40,13 @@
     #fru-agent-activity .filters button { font: 12px/1 inherit; padding: 5px 10px; border-radius: 999px; border: 1px solid #e5e7eb;
       background: #fff; color: #374151; cursor: pointer; }
     #fru-agent-activity .filters button.active { background: #111827; border-color: #111827; color: #f9fafb; }
-    #fru-agent-activity ol.only-agent li.track, #fru-agent-activity ol.only-tracking li:not(.track) { display: none; }
+    #fru-agent-activity ol.only-key li.track:not(.key), #fru-agent-activity ol.only-agent li.track, #fru-agent-activity ol.only-tracking li:not(.track) { display: none; }
     #fru-agent-activity li.track { background: #f5f3ff; font: 12px/1.4 ui-monospace, Menlo, monospace; }
     #fru-agent-activity li.track .badge { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px;
       background: #7c3aed; color: #fff; font-size: 11px; }
+    #fru-agent-activity li.track .tag { display: inline-block; margin-left: 4px; padding: 1px 6px; border-radius: 999px;
+      background: #e5e7eb; color: #374151; font-size: 11px; }
+    #fru-agent-activity li.track.key { box-shadow: inset 3px 0 0 #7c3aed; }
     #fru-agent-activity details summary { cursor: pointer; list-style: none; }
     #fru-agent-activity details summary::-webkit-details-marker { display: none; }
     #fru-agent-activity details summary::before { content: '▸ '; opacity: .5; }
@@ -90,7 +94,9 @@
     }
   };
 
-  const add = (kind, text, data, badge) => {
+  const KEY_EVENTS = ['pageView', 'elementOpenCheckout', 'checkoutView', 'donationComplete'];
+
+  const add = (kind, text, data, badge, tags = []) => {
     const isPinnedToBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
     const item = document.createElement('li');
     item.className = kind;
@@ -106,6 +112,12 @@
         label.textContent = badge;
         summary.append(label);
       }
+      tags.forEach(tag => {
+        const chip = document.createElement('span');
+        chip.className = 'tag';
+        chip.textContent = `#${tag}`;
+        summary.append(chip);
+      });
       const body = document.createElement('pre');
       details.addEventListener('toggle', () => {
         if (details.open && !body.textContent) {
@@ -129,7 +141,9 @@
     const payload = Array.isArray(content) ? content[0] : content;
     const eventName = name.replace(/^.*Tracking:/, '');
     window.__fruActivity.push({ tracking: eventName, payload });
-    add('track', `📊 ${eventName}`, payload, payload?.customEventType);
+    const isKey = KEY_EVENTS.includes(eventName) || payload?.customEventType === 'webmcpToolCall';
+    const tags = Array.isArray(payload?.eventTags) ? payload.eventTags : [];
+    add(isKey ? 'track key' : 'track', `📊 ${eventName}`, payload, payload?.customEventType, tags);
   };
 
   if (showTracking) {
@@ -249,6 +263,7 @@
   panel.querySelectorAll('.filters button').forEach(button =>
     button.addEventListener('click', () => {
       panel.querySelectorAll('.filters button').forEach(other => other.classList.toggle('active', other === button));
+      list.classList.toggle('only-key', button.dataset.filter === 'key');
       list.classList.toggle('only-agent', button.dataset.filter === 'agent');
       list.classList.toggle('only-tracking', button.dataset.filter === 'tracking');
     })
